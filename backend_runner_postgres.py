@@ -89,7 +89,7 @@ class BackendRunner:
                 text=True,
                 encoding='utf-8',
                 env=env,
-                timeout=1800  # 30 minutes timeout
+                timeout=300  # 5 minutes timeout
             )
             
             end_time = time.time()
@@ -104,6 +104,8 @@ class BackendRunner:
                 logger.error("FAILED: " + description + " failed with return code " + str(result.returncode))
                 if result.stderr:
                     logger.error("Error: " + result.stderr)
+                if result.stdout:
+                    logger.error("Output: " + result.stdout[-500:] + "...")
                 return False
                 
         except subprocess.TimeoutExpired:
@@ -249,8 +251,8 @@ class BackendRunner:
                 if self.should_run_scraper() and not self.scraper_running:
                     logger.info("Time to run scraper...")
                     self.run_scraper()
-                    logger.info("Scraper completed, waiting 30 seconds before processor...")
-                    time.sleep(30)  # Wait 30 seconds between processes
+                    logger.info("Scraper completed, waiting 10 seconds before processor...")
+                    time.sleep(10)  # Wait 10 seconds between processes
                 else:
                     if self.scraper_running:
                         logger.info("Scraper already running, skipping...")
