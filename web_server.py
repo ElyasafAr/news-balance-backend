@@ -65,7 +65,7 @@ def start_web_server():
 
 def main():
     """Main function - start web server and backend runner"""
-    print("Starting News Balance Backend with HTTP server...")
+    print("Starting News Balance Backend with HTTP server v2...")
     
     # Start web server in background thread
     web_thread = threading.Thread(target=start_web_server, daemon=True)
