@@ -44,6 +44,8 @@ class BackendRunner:
         self.last_scraper_run = 0
         self.last_processor_run = 0
         self.database_url = os.getenv('DATABASE_URL')
+        self.scraper_running = False  # Flag to prevent parallel execution
+        self.processor_running = False  # Flag to prevent parallel execution
         
         # Setup signal handlers for graceful shutdown
         try:
@@ -164,19 +166,35 @@ class BackendRunner:
     
     def run_scraper(self):
         """Run the news scraper"""
-        if self.run_script('filter_recent_postgres.py', 'News Scraper'):
-            self.last_scraper_run = time.time()
-            logger.info("Scraper completed, updating timestamp")
-        else:
-            logger.error("Scraper failed, will retry on next cycle")
+        if self.scraper_running:
+            logger.warning("Scraper is already running, skipping...")
+            return
+        
+        self.scraper_running = True
+        try:
+            if self.run_script('filter_recent_postgres.py', 'News Scraper'):
+                self.last_scraper_run = time.time()
+                logger.info("Scraper completed, updating timestamp")
+            else:
+                logger.error("Scraper failed, will retry on next cycle")
+        finally:
+            self.scraper_running = False
     
     def run_processor(self):
         """Run the article processor"""
-        if self.run_script('process_articles_postgres.py', 'Article Processor'):
-            self.last_processor_run = time.time()
-            logger.info("Processor completed, updating timestamp")
-        else:
-            logger.error("Processor failed, will retry on next cycle")
+        if self.processor_running:
+            logger.warning("Processor is already running, skipping...")
+            return
+        
+        self.processor_running = True
+        try:
+            if self.run_script('process_articles_postgres.py', 'Article Processor'):
+                self.last_processor_run = time.time()
+                logger.info("Processor completed, updating timestamp")
+            else:
+                logger.error("Processor failed, will retry on next cycle")
+        finally:
+            self.processor_running = False
     
     def log_status(self):
         """Log current status and statistics"""
@@ -226,26 +244,36 @@ class BackendRunner:
                 logger.info("\nCycle " + str(cycle_count) + " - " + current_time)
                 logger.info("=" * 60)
                 
-                # Check if we should run the scraper
-                if self.should_run_scraper():
+                # Run processes synchronously - one after another
+                # First: Run scraper if needed
+                if self.should_run_scraper() and not self.scraper_running:
                     logger.info("Time to run scraper...")
                     self.run_scraper()
+                    logger.info("Scraper completed, waiting 30 seconds before processor...")
+                    time.sleep(30)  # Wait 30 seconds between processes
                 else:
-                    logger.info("Scraper not due yet")
+                    if self.scraper_running:
+                        logger.info("Scraper already running, skipping...")
+                    else:
+                        logger.info("Scraper not due yet")
                 
-                # Check if we should run the processor
-                if self.should_run_processor():
+                # Second: Run processor if needed (after scraper is done)
+                if self.should_run_processor() and not self.processor_running:
                     logger.info("Time to run processor...")
                     self.run_processor()
+                    logger.info("Processor completed")
                 else:
-                    logger.info("Processor not due yet")
+                    if self.processor_running:
+                        logger.info("Processor already running, skipping...")
+                    else:
+                        logger.info("Processor not due yet")
                 
                 # Log current status
                 self.log_status()
                 
-                # Wait before next cycle (1 hour = 3600 seconds)
-                logger.info("Sleeping for 3600 seconds (1 hour) before next cycle...")
-                time.sleep(3600)
+                # Wait before next cycle (5 minutes = 300 seconds)
+                logger.info("Sleeping for 300 seconds (5 minutes) before next cycle...")
+                time.sleep(300)
                 
             except KeyboardInterrupt:
                 logger.info("Interrupted by user")
