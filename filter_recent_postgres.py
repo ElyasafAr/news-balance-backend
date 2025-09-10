@@ -36,7 +36,9 @@ class LiveRotterScraper:
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-Site': 'none',
             'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
+            'Cache-Control': 'max-age=0',
+            'Referer': 'https://rotter.net/',
+            'Origin': 'https://rotter.net'
         }
         
         # Initialize database
@@ -279,10 +281,19 @@ class LiveRotterScraper:
         """Get the live forum page and extract recent news from last 5 hours"""
         print("Fetching live forum page from Rotter.net...")
         
-        try:
-            response = requests.get(self.forum_url, headers=self.headers, timeout=10)
-            response.raise_for_status()
-            response.encoding = 'windows-1255'
+        # Retry mechanism
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                print(f"Attempt {attempt + 1}/{max_retries}...")
+                
+                # Add delay between attempts
+                if attempt > 0:
+                    time.sleep(5)
+                
+                response = requests.get(self.forum_url, headers=self.headers, timeout=15)
+                response.raise_for_status()
+                response.encoding = 'windows-1255'
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
@@ -339,13 +350,18 @@ class LiveRotterScraper:
                         else:
                             print("  No date/time found for: " + title[:60] + "...")
             
-            print("Processed " + str(processed_count) + " articles, found " + str(len(recent_news_items)) + " recent ones")
-            print("Live scraping complete: Found " + str(len(recent_news_items)) + " recent news items from last 24 hours")
-            return recent_news_items
-            
-        except Exception as e:
-            print("Error in live scraping: " + str(e))
-            return []
+                print("Processed " + str(processed_count) + " articles, found " + str(len(recent_news_items)) + " recent ones")
+                print("Live scraping complete: Found " + str(len(recent_news_items)) + " recent news items from last 24 hours")
+                return recent_news_items
+                
+            except Exception as e:
+                print(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt == max_retries - 1:
+                    print("All attempts failed, returning empty list")
+                    return []
+                else:
+                    print("Retrying in 5 seconds...")
+                    continue
     
     def extract_actual_datetime_from_row(self, row):
         """Extract the actual date and time from the table row - simplified and more reliable"""

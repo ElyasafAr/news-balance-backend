@@ -10,6 +10,7 @@ import os
 import requests
 import json
 from datetime import datetime, timedelta
+from typing import Dict
 from dotenv import load_dotenv
 from logging_system import get_logger
 
@@ -263,7 +264,7 @@ class HealthChecker:
             print(f"   🌐 Status Code: {scraper['status_code']}")
         else:
             print("❌ SCRAPER: Error")
-            print(f"   🚨 {scraper['error']}")
+            print(f"   🚨 {scraper.get('error', 'Unknown error')}")
         
         print()
         
