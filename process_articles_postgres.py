@@ -7,26 +7,31 @@ Reads unprocessed articles from the database and processes them using a 4-stage 
 2. Research
 3. Technical Analysis
 4. Journalistic Writing
+Updated to work with PostgreSQL database
 """
 
-import sqlite3
+import psycopg2
 import os
 import json
 import time
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 import anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 
 # Load environment variables from .env.local file
 load_dotenv('.env.local')
 
 class ArticleProcessor:
-    def __init__(self, db_path: str = "rotter_news.db"):
-        """Initialize the article processor with database path"""
-        self.db_path = db_path
+    def __init__(self, database_url: str = None):
+        """Initialize the article processor with database URL"""
+        self.database_url = database_url or os.getenv('DATABASE_URL')
         self.anthropic_client = None
+        self.grok_api_key = os.getenv('groc_API_key')
+        self.grok_client = None
         self.init_anthropic()
+        self.init_grok()
         
         # Stage 1: Relevance check prompt
         self.relevance_prompt = """
@@ -98,19 +103,47 @@ class ArticleProcessor:
 ניתוח טכני: {technical_analysis}
 """
 
+    def get_db_connection(self):
+        """Get PostgreSQL database connection"""
+        try:
+            conn = psycopg2.connect(self.database_url)
+            return conn
+        except Exception as e:
+            print("Error connecting to database: " + str(e))
+            return None
+
     def init_anthropic(self):
         """Initialize Anthropic client with API key from environment"""
         api_key = os.getenv('ANTHROPIC_API_KEY')
         if not api_key:
-            print("❌ Error: ANTHROPIC_API_KEY not found in .env.local file")
+            print("Error: ANTHROPIC_API_KEY not found in .env.local file")
             return False
         
         try:
             self.anthropic_client = anthropic.Anthropic(api_key=api_key)
-            print("✅ Anthropic client initialized successfully")
+            print("Anthropic client initialized successfully")
             return True
         except Exception as e:
-            print(f"❌ Error initializing Anthropic client: {e}")
+            print("Error initializing Anthropic client: " + str(e))
+            return False
+
+    def init_grok(self):
+        """Initialize Grok client"""
+        try:
+            if self.grok_api_key:
+                self.grok_client = OpenAI(
+                    api_key=self.grok_api_key,
+                    base_url="https://api.x.ai/v1"
+                )
+                print("Grok client initialized successfully")
+                return True
+            else:
+                print("Grok API key not found")
+                self.grok_client = None
+                return False
+        except Exception as e:
+            print("Error initializing Grok: " + str(e))
+            self.grok_client = None
             return False
 
     def test_internet_access(self):
@@ -126,10 +159,10 @@ class ArticleProcessor:
             
             result = response.content[0].text
             if "לא יכול לגשת" in result or "אין לי גישה" in result:
-                print("❌ Model has no internet access!")
+                print("Model has no internet access!")
                 return False
             
-            print("✅ Model appears to have internet access")
+            print("Model appears to have internet access")
             return True
         except:
             return False
@@ -146,6 +179,28 @@ class ArticleProcessor:
         is_generic = "לא מצאתי" in research_result
         
         return has_sources and not is_too_short and not is_generic
+
+    def call_grok_api(self, prompt: str, max_tokens: int = 1500) -> str:
+        """Call Grok API with the given prompt"""
+        try:
+            if not self.grok_client:
+                print("Grok client not initialized!")
+                return "Grok client not initialized"
+            
+            response = self.grok_client.chat.completions.create(
+                model="grok-3",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_tokens,
+                temperature=0.3
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            print("Error calling Grok API: " + str(e))
+            return f"Grok API error: {e}"
 
     def check_article_relevance(self, article_content: str, article_title: str) -> Tuple[bool, str]:
         """Check if article is relevant"""
@@ -171,62 +226,43 @@ class ArticleProcessor:
             return is_relevant, relevance_text
             
         except Exception as e:
-            print(f"❌ Error in relevance check: {e}")
+            print("Error in relevance check: " + str(e))
             return True, "Error in checking relevance"
 
     def research_topic(self, main_topic: str, article_summary: str) -> str:
-        """Research with quality verification"""
+        """Research with quality verification using Grok API"""
         try:
             prompt = self.research_prompt.format(
                 main_topic=main_topic,
                 article_summary=article_summary
             )
             
-            response = self.anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=1500,
-                temperature=0.3,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            research_result = response.content[0].text
+            research_result = self.call_grok_api(prompt, max_tokens=1500)
             
             # Verify quality
             if not self.verify_research_quality(research_result):
-                print("⚠️ Research quality low - trying again...")
+                print("Research quality low - trying again with Grok...")
                 retry_prompt = f"בצע חיפוש מעמיק יותר על: {main_topic}. חובה למצוא מקורות אמיתיים!"
-                retry_response = self.anthropic_client.messages.create(
-                    model="claude-3-haiku-20240307",
-                    max_tokens=1500,
-                    messages=[{"role": "user", "content": retry_prompt}]
-                )
-                research_result = retry_response.content[0].text
+                research_result = self.call_grok_api(retry_prompt, max_tokens=1500)
             
             return research_result
             
         except Exception as e:
-            print(f"❌ Error in research stage: {e}")
+            print("Error in research stage: " + str(e))
             return "Research failed"
 
     def create_technical_analysis(self, original_text: str, research_findings: str) -> str:
-        """Stage 3: Create technical analysis using the analysis prompt"""
+        """Stage 3: Create technical analysis using Grok API"""
         try:
             prompt = self.analysis_prompt.format(
                 original_text=original_text[:2000],
                 research_findings=research_findings
             )
             
-            response = self.anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=2000,
-                temperature=0.3,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            return response.content[0].text
+            return self.call_grok_api(prompt, max_tokens=2000)
             
         except Exception as e:
-            print(f"❌ Error in technical analysis: {e}")
+            print("Error in technical analysis: " + str(e))
             return f"Technical analysis failed: {e}"
 
     def create_journalistic_article(self, technical_analysis: str) -> str:
@@ -246,19 +282,19 @@ class ArticleProcessor:
             return response.content[0].text
             
         except Exception as e:
-            print(f"❌ Error in journalistic writing: {e}")
+            print("Error in journalistic writing: " + str(e))
             return f"Journalistic writing failed: {e}"
 
     def analyze_article_with_anthropic(self, article_content: str, article_title: str) -> Optional[Dict]:
         """Main analysis pipeline using 4-stage approach"""
-        print(f"🚀 Starting 4-stage analysis for: {article_title[:50]}...")
+        print("Starting 4-stage analysis for: " + article_title[:50] + "...")
         
         # Stage 1: Check relevance
-        print("📋 Stage 1: Checking relevance...")
+        print("Stage 1: Checking relevance...")
         is_relevant, relevance_reason = self.check_article_relevance(article_content, article_title)
         
         if not is_relevant:
-            print(f"🚫 Article not relevant: {relevance_reason}")
+            print("Article not relevant: " + relevance_reason)
             return {
                 'analysis': {
                     'relevant': False,
@@ -270,26 +306,26 @@ class ArticleProcessor:
                 'is_relevant': False
             }
         
-        print(f"✅ Article is relevant: {relevance_reason}")
+        print("Article is relevant: " + relevance_reason)
         
         # Stage 2: Research
-        print("🔍 Stage 2: Researching topic...")
+        print("Stage 2: Researching topic...")
         main_topic = article_title  # Simple topic extraction
         article_summary = article_content[:500]  # First 500 chars as summary
         research_findings = self.research_topic(main_topic, article_summary)
         
-        print(f"📚 Research completed, findings length: {len(research_findings)} characters")
+        print("Research completed, findings length: " + str(len(research_findings)) + " characters")
         
         # Add delay between stages
         time.sleep(1)
         
         # Stage 3: Technical Analysis
-        print("✍️ Stage 3: Technical analysis...")
+        print("Stage 3: Technical analysis...")
         technical_analysis = self.create_technical_analysis(article_content, research_findings)
         time.sleep(1)
         
         # Stage 4: Journalistic Writing
-        print("📝 Stage 4: Final article...")
+        print("Stage 4: Final article...")
         final_article = self.create_journalistic_article(technical_analysis)
         
         # Combine results
@@ -302,9 +338,9 @@ class ArticleProcessor:
             'is_relevant': True
         }
         
-        print("🎉 4-stage analysis completed successfully")
+        print("4-stage analysis completed successfully")
         print("\n" + "="*80)
-        print("📝 FINAL ARTICLE:")
+        print("FINAL ARTICLE:")
         print("="*80)
         print(final_article)
         print("="*80)
@@ -313,15 +349,18 @@ class ArticleProcessor:
         return final_result
 
     def get_unprocessed_articles(self) -> List[Dict]:
-        """Get all articles where isProcessed = 0"""
+        """Get all articles where isprocessed = 0"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_db_connection()
+            if not conn:
+                return []
+            
             cursor = conn.cursor()
             
             cursor.execute("""
                 SELECT id, title, url, clean_content, created_at 
                 FROM news_items 
-                WHERE isProcessed = 0 
+                WHERE isprocessed = 0 
                 ORDER BY created_at ASC
             """)
             
@@ -336,61 +375,64 @@ class ArticleProcessor:
                 })
             
             conn.close()
-            print(f"📰 Found {len(articles)} unprocessed articles")
+            print("Found " + str(len(articles)) + " unprocessed articles")
             return articles
             
         except Exception as e:
-            print(f"❌ Error getting unprocessed articles: {e}")
+            print("Error getting unprocessed articles: " + str(e))
             return []
 
     def update_article_as_processed(self, article_id: int, analysis_data: Dict):
         """Mark article as processed and save analysis data"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            
             cursor = conn.cursor()
             
-            # Determine the isProcessed value based on relevance
+            # Determine the isprocessed value based on relevance
             if analysis_data.get('is_relevant', True):
                 is_processed_value = 1  # Relevant article - fully processed
-                print(f"✅ Article {article_id} marked as RELEVANT (isProcessed = 1)")
+                print("Article " + str(article_id) + " marked as RELEVANT (isprocessed = 1)")
             else:
                 is_processed_value = 2  # Non-relevant article - marked as such
-                print(f"🚫 Article {article_id} marked as NOT RELEVANT (isProcessed = 2)")
+                print("Article " + str(article_id) + " marked as NOT RELEVANT (isprocessed = 2)")
             
             # Update the article with the new 4-stage result structure
             cursor.execute("""
                 UPDATE news_items 
-                SET isProcessed = ?, 
-                    process_data = ? 
-                WHERE id = ?
+                SET isprocessed = %s, 
+                    process_data = %s 
+                WHERE id = %s
             """, (is_processed_value, json.dumps(analysis_data), article_id))
             
             conn.commit()
             conn.close()
             
-            print(f"✅ Article {article_id} updated successfully with 4-stage analysis")
+            print("Article " + str(article_id) + " updated successfully with 4-stage analysis")
             
         except Exception as e:
-            print(f"❌ Error updating article {article_id}: {e}")
+            print("Error updating article " + str(article_id) + ": " + str(e))
 
     def process_articles(self, limit: Optional[int] = None):
         """Main function to process unprocessed articles automatically"""
-        print("🚀 Starting automatic article processing with 4-stage pipeline...")
+        print("Starting automatic article processing with 4-stage pipeline...")
         print("=" * 60)
         
         # Get unprocessed articles
         articles = self.get_unprocessed_articles()
         
         if not articles:
-            print("✨ No unprocessed articles found!")
+            print("No unprocessed articles found!")
             return
         
         # Apply limit if specified
         if limit:
             articles = articles[:limit]
-            print(f"📝 Processing limited to {limit} articles")
+            print("Processing limited to " + str(limit) + " articles")
         else:
-            print(f"📝 Processing ALL {len(articles)} unprocessed articles automatically")
+            print("Processing ALL " + str(len(articles)) + " unprocessed articles automatically")
         
         processed_count = 0
         relevant_count = 0
@@ -398,10 +440,10 @@ class ArticleProcessor:
         error_count = 0
         
         for i, article in enumerate(articles, 1):
-            print(f"\n📰 Processing article {i}/{len(articles)}: {article['title'][:60]}...")
-            print(f"   ID: {article['id']}")
-            print(f"   URL: {article['url']}")
-            print(f"   Content length: {len(article['clean_content'])} characters")
+            print("\nProcessing article " + str(i) + "/" + str(len(articles)) + ": " + article['title'][:60] + "...")
+            print("   ID: " + str(article['id']))
+            print("   URL: " + article['url'])
+            print("   Content length: " + str(len(article['clean_content'])) + " characters")
             
             # Analyze the article using 4-stage pipeline
             analysis_result = self.analyze_article_with_anthropic(
@@ -417,41 +459,44 @@ class ArticleProcessor:
                 # Count relevant vs non-relevant
                 if analysis_result.get('is_relevant', True):
                     relevant_count += 1
-                    print(f"   ✅ Marked as RELEVANT")
+                    print("   Marked as RELEVANT")
                 else:
                     non_relevant_count += 1
-                    print(f"   🚫 Marked as NOT RELEVANT")
+                    print("   Marked as NOT RELEVANT")
             else:
                 error_count += 1
-                print(f"   ❌ Failed to process")
+                print("   Failed to process")
             
             # Add delay to avoid rate limiting
             if i < len(articles):
-                print("   ⏳ Waiting 2 seconds before next article...")
+                print("   Waiting 2 seconds before next article...")
                 time.sleep(2)
         
         print("\n" + "=" * 60)
-        print(f"🎉 Processing complete!")
-        print(f"   ✅ Successfully processed: {processed_count}")
-        print(f"   🔍 Relevant articles: {relevant_count}")
-        print(f"   🚫 Non-relevant articles: {non_relevant_count}")
-        print(f"   ❌ Errors: {error_count}")
-        print(f"   📊 Total articles: {len(articles)}")
+        print("Processing complete!")
+        print("   Successfully processed: " + str(processed_count))
+        print("   Relevant articles: " + str(relevant_count))
+        print("   Non-relevant articles: " + str(non_relevant_count))
+        print("   Errors: " + str(error_count))
+        print("   Total articles: " + str(len(articles)))
 
     def show_processing_stats(self):
         """Show statistics about processed vs unprocessed articles"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            
             cursor = conn.cursor()
             
             # Get counts for all statuses
-            cursor.execute("SELECT COUNT(*) FROM news_items WHERE isProcessed = 0")
+            cursor.execute("SELECT COUNT(*) FROM news_items WHERE isprocessed = 0")
             unprocessed_count = cursor.fetchone()[0]
             
-            cursor.execute("SELECT COUNT(*) FROM news_items WHERE isProcessed = 1")
+            cursor.execute("SELECT COUNT(*) FROM news_items WHERE isprocessed = 1")
             processed_relevant_count = cursor.fetchone()[0]
             
-            cursor.execute("SELECT COUNT(*) FROM news_items WHERE isProcessed = 2")
+            cursor.execute("SELECT COUNT(*) FROM news_items WHERE isprocessed = 2")
             processed_non_relevant_count = cursor.fetchone()[0]
             
             cursor.execute("SELECT COUNT(*) FROM news_items")
@@ -459,19 +504,19 @@ class ArticleProcessor:
             
             conn.close()
             
-            print(f"\n📊 Processing Statistics:")
-            print(f"   Total articles: {total_count}")
-            print(f"   🔍 Relevant & processed: {processed_relevant_count}")
-            print(f"   🚫 Non-relevant & marked: {processed_non_relevant_count}")
-            print(f"   ⏳ Unprocessed: {unprocessed_count}")
+            print("\nProcessing Statistics:")
+            print("   Total articles: " + str(total_count))
+            print("   Relevant & processed: " + str(processed_relevant_count))
+            print("   Non-relevant & marked: " + str(processed_non_relevant_count))
+            print("   Unprocessed: " + str(unprocessed_count))
             
             total_processed = processed_relevant_count + processed_non_relevant_count
             if total_count > 0:
                 progress = (total_processed/total_count*100)
-                print(f"   📈 Progress: {progress:.1f}% ({total_processed}/{total_count})")
+                print("   Progress: " + str(progress)[:4] + "% (" + str(total_processed) + "/" + str(total_count) + ")")
             
         except Exception as e:
-            print(f"❌ Error getting processing stats: {e}")
+            print("Error getting processing stats: " + str(e))
 
 def main():
     """Main function - runs silently and processes all articles automatically"""
@@ -483,19 +528,19 @@ def main():
     processor = ArticleProcessor()
     
     if not processor.anthropic_client:
-        print("❌ Cannot proceed without Anthropic client")
+        print("Cannot proceed without Anthropic client")
         return
     
     # Test internet access first
     if not processor.test_internet_access():
-        print("⚠️ Warning: Limited internet access detected")
+        print("Warning: Limited internet access detected")
     
     # Show current stats before processing
     processor.show_processing_stats()
     
     # Start automatic processing of ALL remaining articles
-    print("\n🚀 Starting automatic processing of ALL remaining articles...")
-    print("⏳ This will run silently without user interaction")
+    print("\nStarting automatic processing of ALL remaining articles...")
+    print("This will run silently without user interaction")
     print("=" * 70)
     
     try:
@@ -503,15 +548,15 @@ def main():
         processor.process_articles()
         
     except KeyboardInterrupt:
-        print("\n\n⏹️ Processing interrupted by user")
+        print("\n\nProcessing interrupted by user")
         return
     except Exception as e:
-        print(f"❌ Error during processing: {e}")
+        print("Error during processing: " + str(e))
         return
     
     # Show final stats after processing
     print("\n" + "=" * 70)
-    print("🎉 AUTOMATIC PROCESSING COMPLETE!")
+    print("AUTOMATIC PROCESSING COMPLETE!")
     print("=" * 70)
     processor.show_processing_stats()
 
