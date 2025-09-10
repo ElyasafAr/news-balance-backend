@@ -14,7 +14,7 @@ from datetime import datetime
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/health':
+        if self.path == '/health' or self.path == '/':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -61,6 +61,7 @@ def start_web_server():
     server.start_time = time.time()
     
     print(f"Starting web server on port {port}...")
+    print(f"Web server is ready to accept connections on 0.0.0.0:{port}")
     server.serve_forever()
 
 def main():
