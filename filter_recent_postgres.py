@@ -294,62 +294,62 @@ class LiveRotterScraper:
                 response = requests.get(self.forum_url, headers=self.headers, timeout=15)
                 response.raise_for_status()
                 response.encoding = 'windows-1255'
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            recent_news_items = []
-            processed_count = 0
-            
-            # Find all table rows
-            rows = soup.find_all('tr')
-            print("Found " + str(len(rows)) + " table rows")
-            
-            for row in rows:
-                # Look for links in each row
-                links = row.find_all('a', href=True)
                 
-                for link in links:
-                    href = link.get('href', '')
-                    title = link.get_text(strip=True)
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                recent_news_items = []
+                processed_count = 0
+                
+                # Find all table rows
+                rows = soup.find_all('tr')
+                print("Found " + str(len(rows)) + " table rows")
+                
+                for row in rows:
+                    # Look for links in each row
+                    links = row.find_all('a', href=True)
                     
-                    # Filter for news-like content
-                    if (title and len(title) > 15 and 
-                        not title.startswith('לחץ כאן') and
-                        not title.startswith('אל לובי') and
-                        ('dcboard.cgi' in href or 'forum' in href)):
+                    for link in links:
+                        href = link.get('href', '')
+                        title = link.get_text(strip=True)
                         
-                        processed_count += 1
-                        
-                        # Get the entire row text to check for date/time
-                        row_text = row.get_text()
-                        
-                        # Extract actual date and time from the row
-                        extracted_datetime = self.extract_actual_datetime_from_row(row)
-                        
-                        if extracted_datetime:
-                            print("  Found date/time: " + str(extracted_datetime))
+                        # Filter for news-like content
+                        if (title and len(title) > 15 and 
+                            not title.startswith('לחץ כאן') and
+                            not title.startswith('אל לובי') and
+                            ('dcboard.cgi' in href or 'forum' in href)):
                             
-                            # Check if this is within last 24 hours (focused filtering)
-                            if self.is_within_24_hours(extracted_datetime):
-                                # Make URL absolute
-                                if href.startswith('http'):
-                                    url = href
-                                else:
-                                    url = self.base_url + href
+                            processed_count += 1
+                            
+                            # Get the entire row text to check for date/time
+                            row_text = row.get_text()
+                            
+                            # Extract actual date and time from the row
+                            extracted_datetime = self.extract_actual_datetime_from_row(row)
+                            
+                            if extracted_datetime:
+                                print("  Found date/time: " + str(extracted_datetime))
                                 
-                                recent_news_items.append({
-                                    'title': title,
-                                    'url': url,
-                                    'scraped_at': datetime.now().isoformat(),
-                                    'row_text': row_text[:200],
-                                    'actual_datetime': extracted_datetime
-                                })
-                                print("  Added recent news: " + title[:60] + "...")
+                                # Check if this is within last 24 hours (focused filtering)
+                                if self.is_within_24_hours(extracted_datetime):
+                                    # Make URL absolute
+                                    if href.startswith('http'):
+                                        url = href
+                                    else:
+                                        url = self.base_url + href
+                                    
+                                    recent_news_items.append({
+                                        'title': title,
+                                        'url': url,
+                                        'scraped_at': datetime.now().isoformat(),
+                                        'row_text': row_text[:200],
+                                        'actual_datetime': extracted_datetime
+                                    })
+                                    print("  Added recent news: " + title[:60] + "...")
+                                else:
+                                    print("  Skipped (too old): " + title[:60] + "... - Date: " + str(extracted_datetime))
                             else:
-                                print("  Skipped (too old): " + title[:60] + "... - Date: " + str(extracted_datetime))
-                        else:
-                            print("  No date/time found for: " + title[:60] + "...")
-            
+                                print("  No date/time found for: " + title[:60] + "...")
+                
                 print("Processed " + str(processed_count) + " articles, found " + str(len(recent_news_items)) + " recent ones")
                 print("Live scraping complete: Found " + str(len(recent_news_items)) + " recent news items from last 24 hours")
                 return recent_news_items
