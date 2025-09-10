@@ -427,12 +427,14 @@ class ArticleProcessor:
             print("No unprocessed articles found!")
             return
         
-        # Apply limit if specified
+        # Apply limit if specified, default to 1 for Railway
         if limit:
             articles = articles[:limit]
             print("Processing limited to " + str(limit) + " articles")
         else:
-            print("Processing ALL " + str(len(articles)) + " unprocessed articles automatically")
+            # Default to 1 article for Railway to avoid memory issues
+            articles = articles[:1]
+            print("Processing 1 article (Railway default to avoid memory issues)")
         
         processed_count = 0
         relevant_count = 0
