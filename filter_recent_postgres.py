@@ -14,6 +14,7 @@ import time
 import psycopg2
 import hashlib
 import os
+import random
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -24,8 +25,16 @@ class LiveRotterScraper:
         self.base_url = "https://rotter.net"
         self.forum_url = "https://rotter.net/forum/listforum.php"
         self.database_url = os.getenv('DATABASE_URL')
+        # Multiple User-Agents for rotation
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
+        
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
             'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7',
             'Accept-Encoding': 'gzip, deflate, br',
@@ -34,15 +43,25 @@ class LiveRotterScraper:
             'Upgrade-Insecure-Requests': '1',
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-Site': 'same-origin',
             'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0',
             'Referer': 'https://rotter.net/',
-            'Origin': 'https://rotter.net'
+            'Origin': 'https://rotter.net',
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"'
         }
         
         # Initialize database
         self.init_database()
+    
+    def get_random_headers(self):
+        """Get headers with random User-Agent"""
+        import random
+        headers = self.headers.copy()
+        headers['User-Agent'] = random.choice(self.user_agents)
+        return headers
     
     def get_db_connection(self):
         """Get PostgreSQL database connection"""
@@ -281,6 +300,14 @@ class LiveRotterScraper:
         """Get the live forum page and extract recent news from last 5 hours"""
         print("Fetching live forum page from Rotter.net...")
         
+        # Try different URLs if main one fails
+        urls_to_try = [
+            self.forum_url,
+            "https://rotter.net/forum/",
+            "https://rotter.net/",
+            "https://rotter.net/forum/listforum.php?f=1"
+        ]
+        
         # Retry mechanism
         max_retries = 3
         for attempt in range(max_retries):
@@ -291,7 +318,18 @@ class LiveRotterScraper:
                 if attempt > 0:
                     time.sleep(5)
                 
-                response = requests.get(self.forum_url, headers=self.headers, timeout=15)
+                # Use random headers and add session for cookie persistence
+                session = requests.Session()
+                headers = self.get_random_headers()
+                
+                # Add random delay to mimic human behavior
+                time.sleep(random.uniform(1, 3))
+                
+                # Try different URLs
+                url_to_try = urls_to_try[attempt % len(urls_to_try)]
+                print(f"Trying URL: {url_to_try}")
+                
+                response = session.get(url_to_try, headers=headers, timeout=15)
                 response.raise_for_status()
                 response.encoding = 'windows-1255'
                 
